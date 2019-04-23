@@ -101,6 +101,8 @@
 @property (nonatomic, retain) NSString*        alternateXib;
 @property (nonatomic)         BOOL             shutterPressed;
 @property (nonatomic, retain) IBOutlet UIView* overlayView;
+@property (nonatomic, retain) UIToolbar * toolbar;
+@property (nonatomic, retain) UIView * reticleView;
 // unsafe_unretained is equivalent to assign - used to prevent retain cycles in the property below
 @property (nonatomic, unsafe_unretained) id orientationDelegate;
 
@@ -139,6 +141,16 @@
             authStatus == AVAuthorizationStatusRestricted);
 }
 
+-(BOOL)isUsageDescriptionSet
+{
+  NSDictionary * plist = [[NSBundle mainBundle] infoDictionary];
+  if ([plist objectForKey:@"NSCameraUsageDescription" ] ||
+      [[NSBundle mainBundle] localizedStringForKey: @"NSCameraUsageDescription" value: nil table: @"InfoPlist"]) {
+    return YES;
+  }
+  return NO;
+}
+
 
 
 //--------------------------------------------------------------------------
@@ -173,6 +185,10 @@
         NSString * error = NSLocalizedString(@"Access to the camera has been prohibited; please enable it in the Settings app to continue.",nil);
         [self returnError:error callback:callback];
         return;
+    } else if (![self isUsageDescriptionSet]) {
+      NSString * error = NSLocalizedString(@"NSCameraUsageDescription is not set in the info.plist", nil);
+      [self returnError:error callback:callback];
+      return;
     }
 
     processor = [[CDVbcsProcessor alloc]
@@ -218,7 +234,6 @@
                  callback:callback
                  stringToEncode: command.arguments[0][@"data"]
                  ];
-
     // queue [processor generateImage] to run on the event loop
     [processor performSelector:@selector(generateImage) withObject:nil afterDelay:0];
 }
@@ -356,6 +371,14 @@ parentViewController:(UIViewController*)parentViewController
     self.capturing = NO;
     [self.captureSession stopRunning];
     [self.parentViewController dismissViewControllerAnimated:self.isTransitionAnimated completion:callbackBlock];
+
+
+    AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
+    [device lockForConfiguration:nil];
+    if([device isAutoFocusRangeRestrictionSupported]) {
+        [device setAutoFocusRangeRestriction:AVCaptureAutoFocusRangeRestrictionNone];
+    }
+    [device unlockForConfiguration];
 
     // viewcontroller holding onto a reference to us, release them so they
     // will release us
@@ -511,7 +534,7 @@ parentViewController:(UIViewController*)parentViewController
     else {
         return @"unable to add video capture output to session";
     }
-    
+
     [output setMetadataObjectTypes:[self formatObjectTypes]];
 
     // setup capture preview layer
@@ -588,7 +611,9 @@ parentViewController:(UIViewController*)parentViewController
     if (format.type == AVMetadataObjectTypeCode128Code)     return @"CODE_128";
     if (format.type == AVMetadataObjectTypeCode93Code)      return @"CODE_93";
     if (format.type == AVMetadataObjectTypeCode39Code)      return @"CODE_39";
-    if (format.type == AVMetadataObjectTypeITF14Code)          return @"ITF";
+    if (format.type == AVMetadataObjectTypeInterleaved2of5Code) return @"ITF";
+    if (format.type == AVMetadataObjectTypeITF14Code)          return @"ITF_14";
+
     if (format.type == AVMetadataObjectTypePDF417Code)      return @"PDF_417";
     return @"???";
 }
@@ -601,9 +626,9 @@ parentViewController:(UIViewController*)parentViewController
     if (self.formats != nil) {
         supportedFormats = [self.formats componentsSeparatedByString:@","];
     }
-    
+
     NSMutableArray * formatObjectTypes = [NSMutableArray array];
-    
+
     if (self.formats == nil || [supportedFormats containsObject:@"QR_CODE"]) [formatObjectTypes addObject:AVMetadataObjectTypeQRCode];
     if (self.formats == nil || [supportedFormats containsObject:@"AZTEC"]) [formatObjectTypes addObject:AVMetadataObjectTypeAztecCode];
     if (self.formats == nil || [supportedFormats containsObject:@"DATA_MATRIX"]) [formatObjectTypes addObject:AVMetadataObjectTypeDataMatrixCode];
@@ -613,9 +638,10 @@ parentViewController:(UIViewController*)parentViewController
     if (self.formats == nil || [supportedFormats containsObject:@"CODE_128"]) [formatObjectTypes addObject:AVMetadataObjectTypeCode128Code];
     if (self.formats == nil || [supportedFormats containsObject:@"CODE_93"]) [formatObjectTypes addObject:AVMetadataObjectTypeCode93Code];
     if (self.formats == nil || [supportedFormats containsObject:@"CODE_39"]) [formatObjectTypes addObject:AVMetadataObjectTypeCode39Code];
-    if (self.formats == nil || [supportedFormats containsObject:@"ITF"]) [formatObjectTypes addObject:AVMetadataObjectTypeITF14Code];
+    if (self.formats == nil || [supportedFormats containsObject:@"ITF"]) [formatObjectTypes addObject:AVMetadataObjectTypeInterleaved2of5Code];
+    if (self.formats == nil || [supportedFormats containsObject:@"ITF_14"]) [formatObjectTypes addObject:AVMetadataObjectTypeITF14Code];
     if (self.formats == nil || [supportedFormats containsObject:@"PDF_417"]) [formatObjectTypes addObject:AVMetadataObjectTypePDF417Code];
-    
+
     return formatObjectTypes;
 }
 
@@ -786,26 +812,13 @@ parentViewController:(UIViewController*)parentViewController
 //--------------------------------------------------------------------------
 - (void)loadView {
     self.view = [[UIView alloc] initWithFrame: self.processor.parentViewController.view.frame];
-
-    // setup capture preview layer
-    AVCaptureVideoPreviewLayer* previewLayer = self.processor.previewLayer;
-    previewLayer.frame = self.view.bounds;
-    previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
-
-    if ([previewLayer.connection isVideoOrientationSupported]) {
-        [previewLayer.connection setVideoOrientation:AVCaptureVideoOrientationPortrait];
-    }
-
-    [self.view.layer insertSublayer:previewLayer below:[[self.view.layer sublayers] objectAtIndex:0]];
-
-    [self.view addSubview:[self buildOverlayView]];
 }
 
 //--------------------------------------------------------------------------
 - (void)viewWillAppear:(BOOL)animated {
 
     // set video orientation to what the camera sees
-    self.processor.previewLayer.connection.videoOrientation = (AVCaptureVideoOrientation) [[UIApplication sharedApplication] statusBarOrientation];
+    self.processor.previewLayer.connection.videoOrientation = [self interfaceOrientationToVideoOrientation:[UIApplication sharedApplication].statusBarOrientation];
 
     // this fixes the bug when the statusbar is landscape, and the preview layer
     // starts up in portrait (not filling the whole view)
@@ -814,9 +827,36 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)viewDidAppear:(BOOL)animated {
+    // setup capture preview layer
+    AVCaptureVideoPreviewLayer* previewLayer = self.processor.previewLayer;
+    previewLayer.frame = self.view.bounds;
+    previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+
+    if ([previewLayer.connection isVideoOrientationSupported]) {
+        previewLayer.connection.videoOrientation = [self interfaceOrientationToVideoOrientation:[UIApplication sharedApplication].statusBarOrientation];
+    }
+
+    [self.view.layer insertSublayer:previewLayer below:[[self.view.layer sublayers] objectAtIndex:0]];
+
+    [self.view addSubview:[self buildOverlayView]];
     [self startCapturing];
 
     [super viewDidAppear:animated];
+}
+
+- (AVCaptureVideoOrientation)interfaceOrientationToVideoOrientation:(UIInterfaceOrientation)orientation {
+    switch (orientation) {
+        case UIInterfaceOrientationPortrait:
+            return AVCaptureVideoOrientationPortrait;
+        case UIInterfaceOrientationPortraitUpsideDown:
+            return AVCaptureVideoOrientationPortraitUpsideDown;
+        case UIInterfaceOrientationLandscapeLeft:
+            return AVCaptureVideoOrientationLandscapeLeft;
+        case UIInterfaceOrientationLandscapeRight:
+            return AVCaptureVideoOrientationLandscapeRight;
+        default:
+            return AVCaptureVideoOrientationPortrait;
+   }
 }
 
 //--------------------------------------------------------------------------
@@ -854,16 +894,16 @@ parentViewController:(UIViewController*)parentViewController
         NSLog(@"%@", @"An error occurred loading the overlay xib.  It appears that the overlayView outlet is not set.");
         return nil;
     }
-	
+
 	self.overlayView.autoresizesSubviews = YES;
     self.overlayView.autoresizingMask    = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.overlayView.opaque              = NO;
-	
+
 	CGRect bounds = self.view.bounds;
     bounds = CGRectMake(0, 0, bounds.size.width, bounds.size.height);
-	
+
 	[self.overlayView setFrame:bounds];
-	
+
     return self.overlayView;
 }
 
@@ -874,7 +914,7 @@ parentViewController:(UIViewController*)parentViewController
     {
         return [self buildOverlayViewFromXib];
     }
-    CGRect bounds = self.view.bounds;
+    CGRect bounds = self.view.frame;
     bounds = CGRectMake(0, 0, bounds.size.width, bounds.size.height);
 
     UIView* overlayView = [[UIView alloc] initWithFrame:bounds];
@@ -882,8 +922,8 @@ parentViewController:(UIViewController*)parentViewController
     overlayView.autoresizingMask    = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     overlayView.opaque              = NO;
 
-    UIToolbar* toolbar = [[UIToolbar alloc] init];
-    toolbar.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleTopMargin;
+    self.toolbar = [[UIToolbar alloc] init];
+    self.toolbar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
 
     id cancelButton = [[UIBarButtonItem alloc]
                        initWithBarButtonSystemItem:UIBarButtonSystemItemCancel
@@ -944,44 +984,23 @@ parentViewController:(UIViewController*)parentViewController
       [items insertObject:torchButton atIndex:0];
     }
   }
-
-    toolbar.items = items;
-
-    bounds = overlayView.bounds;
-
-    [toolbar sizeToFit];
-    CGFloat toolbarHeight  = [toolbar frame].size.height;
-    CGFloat rootViewHeight = CGRectGetHeight(bounds);
-    CGFloat rootViewWidth  = CGRectGetWidth(bounds);
-    CGRect  rectArea       = CGRectMake(0, rootViewHeight - toolbarHeight, rootViewWidth, toolbarHeight);
-    [toolbar setFrame:rectArea];
-
-    [overlayView addSubview: toolbar];
+    self.toolbar.items = items;
+    [overlayView addSubview: self.toolbar];
 
     UIImage* reticleImage = [self buildReticleImage];
-    UIView* reticleView = [[UIImageView alloc] initWithImage:reticleImage];
-    CGFloat minAxis = MIN(rootViewHeight, rootViewWidth);
+    self.reticleView = [[UIImageView alloc] initWithImage:reticleImage];
 
-    rectArea = CGRectMake(
-        (CGFloat) (0.5 * (rootViewWidth  - minAxis)),
-        (CGFloat) (0.5 * (rootViewHeight - minAxis)),
-        minAxis,
-        minAxis
-    );
-
-    [reticleView setFrame:rectArea];
-
-    reticleView.opaque           = NO;
-    reticleView.contentMode      = UIViewContentModeScaleAspectFit;
-    reticleView.autoresizingMask = (UIViewAutoresizing) (0
+    self.reticleView.opaque           = NO;
+    self.reticleView.contentMode      = UIViewContentModeScaleAspectFit;
+    self.reticleView.autoresizingMask = (UIViewAutoresizing) (0
         | UIViewAutoresizingFlexibleLeftMargin
         | UIViewAutoresizingFlexibleRightMargin
         | UIViewAutoresizingFlexibleTopMargin
         | UIViewAutoresizingFlexibleBottomMargin)
     ;
 
-    [overlayView addSubview: reticleView];
-
+    [overlayView addSubview: self.reticleView];
+    [self resizeElements];
     return overlayView;
 }
 
@@ -1073,7 +1092,35 @@ parentViewController:(UIViewController*)parentViewController
     }
 
     previewLayer.videoGravity = AVLayerVideoGravityResizeAspectFill;
+
+    [self resizeElements];
     [UIView setAnimationsEnabled:YES];
+}
+
+-(void) resizeElements {
+    CGRect bounds = self.view.bounds;
+    if (@available(iOS 11.0, *)) {
+        bounds = CGRectMake(bounds.origin.x, bounds.origin.y, bounds.size.width, self.view.safeAreaLayoutGuide.layoutFrame.size.height+self.view.safeAreaLayoutGuide.layoutFrame.origin.y);
+    }
+
+    [self.toolbar sizeToFit];
+    CGFloat toolbarHeight  = [self.toolbar frame].size.height;
+    CGFloat rootViewHeight = CGRectGetHeight(bounds);
+    CGFloat rootViewWidth  = CGRectGetWidth(bounds);
+    CGRect  rectArea       = CGRectMake(0, rootViewHeight - toolbarHeight, rootViewWidth, toolbarHeight);
+    [self.toolbar setFrame:rectArea];
+
+    CGFloat minAxis = MIN(rootViewHeight, rootViewWidth);
+
+    rectArea = CGRectMake(
+                          (CGFloat) (0.5 * (rootViewWidth  - minAxis)),
+                          (CGFloat) (0.5 * (rootViewHeight - minAxis)),
+                          minAxis,
+                          minAxis
+                          );
+
+    [self.reticleView setFrame:rectArea];
+    self.reticleView.center = CGPointMake(self.view.center.x, self.view.center.y-self.toolbar.frame.size.height/2);
 }
 
 @end

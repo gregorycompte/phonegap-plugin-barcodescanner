@@ -1,4 +1,4 @@
-BUNDLE_IDENTIFIER   = com.4js.scanner
+BUNDLE_IDENTIFIER   = com.fourjs.scanner
 APPNAME             = CDVScanner
 DEVICE              = phone
 MODE                = debug
@@ -9,7 +9,20 @@ ifndef GMIDIR
 GMIDIR=$(FGLDIR)
 endif
 
-PLUGIN= $(CURDIR)/../..
+#GMA settings.. GMA needs an absolute path to the plugin
+#so we use some gnu make features to build it
+ABSPATH=$(abspath .)
+DEMODIR=$(shell  dirname $(ABSPATH))
+PLUGINDIR=$(shell dirname $(DEMODIR))
+PLUGIN=$(notdir $(PLUGINDIR))
+GMIPLUGIN=$(PLUGIN)
+#GMI
+# in case you build the demo when having the plugin checked out of github 
+# then we can use a relative build path for GMI
+ifneq ($(wildcard ../../fgldemo),)
+  GMIPLUGIN=$(CURDIR)/../..
+#  FGLLDPATH=../../fgl
+endif
 
 MODULES  = $(patsubst %.4gl, %.42m, $(wildcard *.4gl))
 FORMS    = $(patsubst %.per, %.42f, $(wildcard *.per))
@@ -23,20 +36,30 @@ FORMS    = $(patsubst %.per, %.42f, $(wildcard *.per))
 all:: $(MODULES) $(FORMS) 
 
 define gmibuild
-	gmibuildtool --app-name=$(APPNAME) --bundle-id=$(BUNDLE_IDENTIFIER) --provisioning=$(PROVISIONING_PROFILE) --certificate=$(IDENTITY) --device=$(DEVICE) --mode=$(MODE) --build-cordova=$(PLUGIN) 
+	gmibuildtool --app-name=$(APPNAME) --bundle-id=$(BUNDLE_IDENTIFIER) --provisioning=$(PROVISIONING_PROFILE) --certificate=$(IDENTITY) --device=$(DEVICE) --mode=$(MODE) --build-cordova=$(GMIPLUGIN) 
 endef
 
-#just builds build/iphoneos/GMI.ipa
 gmi.build: all
-	$(call gmibuild)
-	
-#installs the ipa on the device
+	$(call gmibuild,no)
+
 gmi.install: all
-	$(call gmibuild)
-ifeq ($(DEVICE),phone)
-	$(shell GMIDIR="$(GMIDIR)";echo $${GMIDIR// /\\ })/lib/mobiledevice install_app build/iphoneos/GMI.ipa
-endif
+	$(call gmibuild,yes)
+
+gma.build: all 
+#build the native plugin out of this repository  and install it in GMA
+	cd ../../.. && gmabuildtool scaffold --install-plugins $(PLUGIN) && cd -
+	gmabuildtool build --build-quietly --build-cordova $(PLUGIN) --build-app-package-name $(BUNDLE_IDENTIFIER) 
+
+#GMA_DEBUG=-d
+gma.install: 
+	$$ANDROID_SDK_ROOT/platform-tools/adb $(GMA_DEBUG) install -r `find . -name app-unsigned.apk`
+
+echo::
+	echo "PLUGIN=$(PLUGIN)"
+	echo "GMIPLUGIN=$(GMIPLUGIN)"
 
 clean::
-	rm -rf build gmi/appRoot
-	rm -f *.42* cordovamap.txt gmiignore gmi/link_flags.sh gmi/*.a
+	rm -f *.sch *.dbs *.42*
+	rm -rf build bin distbin gma gmi/appRoot
+	rm -f cordovamap.txt gmi/*.a gmi/link_flags.sh *.4pwvs *.4pwdb ../../src/ios/*.a
+	rm -f ../../pluginCalls.*

@@ -51,7 +51,7 @@ gmi.install: all
 gma.build: all ../../../cordova-plugin-compat
 #build the native plugin out of this repository  and install it in GMA
 	cd ../../.. && gmabuildtool scaffold --install-plugins $(PLUGIN),cordova-plugin-compat && cd -
-	gmabuildtool build --build-quietly --build-cordova $(PLUGIN),cordova-plugin-compat --build-app-package-name $(BUNDLE_IDENTIFIER)
+	gmabuildtool build --build-quietly --build-cordova $(PLUGIN),cordova-plugin-compat --build-app-package-name $(BUNDLE_IDENTIFIER) --build-app-name $(APPNAME) -bih gma_icons/ic_app_hdpi.png -bim gma_icons/ic_app_mdpi.png -bixh gma_icons/ic_app_xhdpi.png -bixxh gma_icons/ic_app_xxhdpi.png
 
 #GMA_DEBUG=-d
 gma.install: 

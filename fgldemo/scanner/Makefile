@@ -45,10 +45,13 @@ gmi.build: all
 gmi.install: all
 	$(call gmibuild,yes)
 
-gma.build: all 
+../../../cordova-plugin-compat:
+	cd ../../.. && git clone https://github.com/apache/cordova-plugin-compat && cd -
+
+gma.build: all ../../../cordova-plugin-compat
 #build the native plugin out of this repository  and install it in GMA
-	cd ../../.. && gmabuildtool scaffold --install-plugins $(PLUGIN) && cd -
-	gmabuildtool build --build-quietly --build-cordova $(PLUGIN) --build-app-package-name $(BUNDLE_IDENTIFIER) 
+	cd ../../.. && gmabuildtool scaffold --install-plugins $(PLUGIN),cordova-plugin-compat && cd -
+	gmabuildtool build --build-quietly --build-cordova $(PLUGIN),cordova-plugin-compat --build-app-package-name $(BUNDLE_IDENTIFIER)
 
 #GMA_DEBUG=-d
 gma.install: 
